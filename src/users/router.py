@@ -12,7 +12,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Cookie, Header, status
 
-from src.auth.utils import validate_token_and_extract_user_id
 from src.users.schemas import CreateUserRequest, UserResponse
 from src.common.database import blocked_token_db, session_db, user_db
 from argon2 import PasswordHasher
@@ -46,9 +45,7 @@ def get_user_info(
     token = credential.credentials
     try:
         decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-    except jwt.PyJWTError as e:
-        print(type(e))
-        print(e)
+    except jwt.PyJWTError:
         raise InvalidTokenException()
 
     try:

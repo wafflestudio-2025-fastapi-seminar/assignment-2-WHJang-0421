@@ -1,4 +1,21 @@
 import datetime
+from typing import Annotated
+import jwt
+from src.users.errors import (
+    BadAuthHeaderException,
+    UnauthenticatedException,
+    InvalidTokenException,
+)
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Cookie, Header, status
+
+from src.users.schemas import CreateUserRequest, UserResponse
+from src.common.database import blocked_token_db, session_db, user_db
+from argon2 import PasswordHasher
+from src.auth.password_hash import password_hasher
 import argon2
 from fastapi import APIRouter
 from fastapi import Depends, Cookie
@@ -61,11 +78,60 @@ def login(request: LoginRequest) -> LoginResponse:
     raise InvalidAccountException()
 
 
-#
-#
-# @auth_router.post("/token/refresh")
-#
-#
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+@auth_router.post("/token/refresh")
+def refresh(
+    credential: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> LoginResponse:
+    if not credential:
+        raise UnauthenticatedException()
+    if credential.scheme != "Bearer":
+        raise BadAuthHeaderException()
+
+    token = credential.credentials
+    if token in blocked_token_db.keys():
+        raise InvalidTokenException()
+
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise InvalidTokenException()
+
+    try:
+        user_id = decoded_token["sub"]
+        user_id = int(user_id[-1])
+        exp_time = decoded_token["exp"]
+    except Exception:
+        raise InvalidTokenException()
+
+    blocked_token_db[token] = exp_time
+
+    # create access token
+    access_token_claims = {
+        "sub": f"user {user_id}",
+        "exp": int(
+            (
+                datetime.now(tz=timezone.utc)
+                + timedelta(minutes=SHORT_SESSION_LIFESPAN)
+            ).timestamp()
+        ),
+    }
+    access_token = jwt.encode(access_token_claims, SECRET_KEY, algorithm="HS256")
+    # create refresh token
+    refresh_token_claims = {
+        "sub": f"user {user_id}",
+        "exp": int(
+            (
+                datetime.now(tz=timezone.utc) + timedelta(minutes=LONG_SESSION_LIFESPAN)
+            ).timestamp()
+        ),
+    }
+    decoded_token = jwt.encode(refresh_token_claims, SECRET_KEY, algorithm="HS256")
+    return LoginResponse(access_token=access_token, refresh_token=decoded_token)
+
+
 # @auth_router.delete("/token")
 #
 #
