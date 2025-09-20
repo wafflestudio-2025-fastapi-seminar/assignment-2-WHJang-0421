@@ -1,5 +1,6 @@
 import datetime
 from typing import Annotated
+from fastapi.responses import JSONResponse
 import jwt
 from src.users.errors import (
     BadAuthHeaderException,
@@ -132,7 +133,34 @@ def refresh(
     return LoginResponse(access_token=access_token, refresh_token=decoded_token)
 
 
-# @auth_router.delete("/token")
+@auth_router.delete("/token", status_code=status.HTTP_204_NO_CONTENT)
+def invalidate(
+    credential: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    if not credential:
+        raise UnauthenticatedException()
+    if credential.scheme != "Bearer":
+        raise BadAuthHeaderException()
+
+    token = credential.credentials
+    if token in blocked_token_db.keys():
+        raise InvalidTokenException()
+
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise InvalidTokenException()
+
+    try:
+        user_id = decoded_token["sub"]
+        user_id = int(user_id[-1])
+        exp_time = decoded_token["exp"]
+    except Exception:
+        raise InvalidTokenException()
+
+    blocked_token_db[token] = exp_time
+
+
 #
 #
 # @auth_router.post("/session")
