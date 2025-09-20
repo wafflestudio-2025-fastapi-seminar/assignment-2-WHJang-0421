@@ -24,12 +24,12 @@ SECRET_KEY = secrets.token_bytes(
 @auth_router.post("/token")
 def login(request: LoginRequest) -> LoginResponse:
     try:
-        for user_dict in user_db:
+        for i, user_dict in enumerate(user_db):
             if user_dict["email"] == request.email:
                 password_hasher.verify(user_dict["hashed_password"], request.password)
                 # create access token
                 access_token_claims = {
-                    "sub": user_dict["email"],
+                    "sub": f"user {i}",
                     "exp": int(
                         (
                             datetime.now(tz=timezone.utc)
@@ -42,7 +42,7 @@ def login(request: LoginRequest) -> LoginResponse:
                 )
                 # create refresh token
                 refresh_token_claims = {
-                    "sub": user_dict["email"],
+                    "sub": f"user {i}",
                     "exp": int(
                         (
                             datetime.now(tz=timezone.utc)

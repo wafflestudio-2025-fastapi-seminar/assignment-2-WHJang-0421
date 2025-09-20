@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Cookie, Header, status
 
+from src.auth.utils import validate_token_and_extract_user_id
 from src.users.schemas import CreateUserRequest, UserResponse
 from src.common.database import blocked_token_db, session_db, user_db
 from argon2 import PasswordHasher
@@ -21,5 +22,8 @@ def create_user(request: CreateUserRequest) -> UserResponse:
 
 
 @user_router.get("/me")
-def get_user_info():
-    pass
+def get_user_info(
+    user_id: int = Depends(validate_token_and_extract_user_id),
+) -> UserResponse:
+    user_dict = user_db[user_id]
+    return UserResponse(user_id=user_id, **user_dict)
