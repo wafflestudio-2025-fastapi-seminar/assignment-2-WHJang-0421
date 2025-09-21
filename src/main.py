@@ -15,7 +15,7 @@ app.include_router(api_router)
 def handle_request_validation_error(request, exc):
     return JSONResponse(
         {
-            "error_code": "ERR_OO1",
+            "error_code": "ERR_001",
             "error_msg": "MISSING VALUE",
         },
         status_code=422,

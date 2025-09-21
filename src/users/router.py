@@ -38,6 +38,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 @user_router.get("/me")
 def get_user_info(
     sid: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header()] = None,
     credential: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> UserResponse:
     if sid:
@@ -49,8 +50,10 @@ def get_user_info(
         user_dict = user_db[user_id]
         return UserResponse(user_id=user_id, **user_dict)
 
-    if not credential:
+    if not authorization:
         raise UnauthenticatedException()
+    if not credential:
+        raise BadAuthHeaderException()
     if credential.scheme != "Bearer":
         raise BadAuthHeaderException()
 

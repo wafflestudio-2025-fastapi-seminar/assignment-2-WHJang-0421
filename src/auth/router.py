@@ -15,7 +15,6 @@ from fastapi import APIRouter, Depends, Cookie, Header, status
 
 from src.users.schemas import CreateUserRequest, UserResponse
 from src.common.database import blocked_token_db, session_db, user_db
-from argon2 import PasswordHasher
 from src.auth.password_hash import password_hasher
 import argon2
 from fastapi import APIRouter
@@ -84,10 +83,13 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 @auth_router.post("/token/refresh")
 def refresh(
+    authorization: Annotated[str | None, Header()] = None,
     credential: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> LoginResponse:
-    if not credential:
+    if not authorization:
         raise UnauthenticatedException()
+    if not credential:
+        raise BadAuthHeaderException()
     if credential.scheme != "Bearer":
         raise BadAuthHeaderException()
 
