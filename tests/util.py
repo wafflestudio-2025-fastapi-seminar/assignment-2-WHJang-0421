@@ -7,6 +7,7 @@ def get_all_src_py_files_hash():
         for file in sorted(files):
             if file.endswith(".py"):
                 file_path = os.path.join(root, file)
+                print(file_path)
                 with open(file_path, "rb") as f:
                     while chunk := f.read(8192):
                         hash_sha256.update(chunk)
