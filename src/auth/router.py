@@ -1,23 +1,202 @@
+import datetime
+from typing import Annotated
+from fastapi.responses import JSONResponse
+import jwt
+from src.users.errors import (
+    BadAuthHeaderException,
+    UnauthenticatedException,
+    InvalidTokenException,
+)
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, Response
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Cookie, Header, status
+
+from src.users.schemas import CreateUserRequest, UserResponse
+from src.common.database import blocked_token_db, session_db, user_db
+from src.auth.password_hash import password_hasher
+import argon2
 from fastapi import APIRouter
 from fastapi import Depends, Cookie
 
-from common.database import blocked_token_db, session_db, user_db
+from src.auth.schemas import LoginRequest, LoginResponse
+from src.common.database import blocked_token_db, session_db, user_db
+import jwt
+from src.users.errors import InvalidAccountException
+from datetime import datetime, timedelta, timezone
+from src.auth.password_hash import password_hasher
+import secrets
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
 SHORT_SESSION_LIFESPAN = 15
 LONG_SESSION_LIFESPAN = 24 * 60
 
+SECRET_KEY = secrets.token_bytes(
+    32
+)  # use an in-memory secret key. we use an in-memory db anyway
+
+
 @auth_router.post("/token")
+def login(request: LoginRequest) -> LoginResponse:
+    try:
+        for i, user_dict in enumerate(user_db):
+            if user_dict["email"] == request.email:
+                password_hasher.verify(user_dict["hashed_password"], request.password)
+                # create access token
+                access_token_claims = {
+                    "sub": f"user {i}",
+                    "exp": int(
+                        (
+                            datetime.now(tz=timezone.utc)
+                            + timedelta(minutes=SHORT_SESSION_LIFESPAN)
+                        ).timestamp()
+                    ),
+                }
+                access_token = jwt.encode(
+                    access_token_claims, SECRET_KEY, algorithm="HS256"
+                )
+                # create refresh token
+                refresh_token_claims = {
+                    "sub": f"user {i}",
+                    "exp": int(
+                        (
+                            datetime.now(tz=timezone.utc)
+                            + timedelta(minutes=LONG_SESSION_LIFESPAN)
+                        ).timestamp()
+                    ),
+                }
+                refresh_token = jwt.encode(
+                    refresh_token_claims, SECRET_KEY, algorithm="HS256"
+                )
+                return LoginResponse(
+                    access_token=access_token, refresh_token=refresh_token
+                )
+    except argon2.exceptions.VerifyMismatchError:
+        raise InvalidAccountException()
+    raise InvalidAccountException()
+
+
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 @auth_router.post("/token/refresh")
+def refresh(
+    authorization: Annotated[str | None, Header()] = None,
+    credential: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> LoginResponse:
+    if not authorization:
+        raise UnauthenticatedException()
+    if not credential:
+        raise BadAuthHeaderException()
+    if credential.scheme != "Bearer":
+        raise BadAuthHeaderException()
+
+    token = credential.credentials
+    if token in blocked_token_db.keys():
+        raise InvalidTokenException()
+
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise InvalidTokenException()
+
+    try:
+        user_id = decoded_token["sub"]
+        user_id = int(user_id[-1])
+        exp_time = decoded_token["exp"]
+    except Exception:
+        raise InvalidTokenException()
+
+    blocked_token_db[token] = exp_time
+
+    # create access token
+    access_token_claims = {
+        "sub": f"user {user_id}",
+        "exp": int(
+            (
+                datetime.now(tz=timezone.utc)
+                + timedelta(minutes=SHORT_SESSION_LIFESPAN)
+            ).timestamp()
+        ),
+    }
+    access_token = jwt.encode(access_token_claims, SECRET_KEY, algorithm="HS256")
+    # create refresh token
+    refresh_token_claims = {
+        "sub": f"user {user_id}",
+        "exp": int(
+            (
+                datetime.now(tz=timezone.utc) + timedelta(minutes=LONG_SESSION_LIFESPAN)
+            ).timestamp()
+        ),
+    }
+    decoded_token = jwt.encode(refresh_token_claims, SECRET_KEY, algorithm="HS256")
+    return LoginResponse(access_token=access_token, refresh_token=decoded_token)
 
 
-@auth_router.delete("/token")
+@auth_router.delete("/token", status_code=status.HTTP_204_NO_CONTENT)
+def invalidate(
+    credential: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+):
+    if not credential:
+        raise UnauthenticatedException()
+    if credential.scheme != "Bearer":
+        raise BadAuthHeaderException()
+
+    token = credential.credentials
+    if token in blocked_token_db.keys():
+        raise InvalidTokenException()
+
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise InvalidTokenException()
+
+    try:
+        user_id = decoded_token["sub"]
+        user_id = int(user_id[-1])
+        exp_time = decoded_token["exp"]
+    except Exception:
+        raise InvalidTokenException()
+
+    blocked_token_db[token] = exp_time
 
 
 @auth_router.post("/session")
+def create_session(request: LoginRequest, response: Response):
+    try:
+        for i, user_dict in enumerate(user_db):
+            if user_dict["email"] == request.email:
+                password_hasher.verify(user_dict["hashed_password"], request.password)
+                sid = secrets.token_urlsafe(32)
+                exp_time = datetime.now(tz=timezone.utc) + timedelta(
+                    minutes=LONG_SESSION_LIFESPAN
+                )
+                session_db[sid] = (exp_time, i)
+
+                response.set_cookie(
+                    key="sid",
+                    value=sid,
+                    path="/",
+                    samesite="lax",
+                    httponly=True,
+                    max_age=LONG_SESSION_LIFESPAN * 60,
+                )
+                return
+    except argon2.exceptions.VerifyMismatchError:
+        raise InvalidAccountException()
+    raise InvalidAccountException()
 
 
-@auth_router.delete("/session")
+@auth_router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(
+    response: Response,
+    sid: Annotated[str | None, Cookie()] = None,
+):
+    if sid:
+        response.set_cookie(
+            key="sid", value=sid, path="/", samesite="lax", httponly=True, max_age=0
+        )
+        if sid in session_db.keys():
+            del session_db[sid]
