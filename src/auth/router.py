@@ -8,7 +8,7 @@ from src.users.errors import (
     InvalidTokenException,
 )
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi import Depends
+from fastapi import Depends, Response
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Cookie, Header, status
@@ -161,9 +161,40 @@ def invalidate(
     blocked_token_db[token] = exp_time
 
 
-#
-#
-# @auth_router.post("/session")
-#
-#
-# @auth_router.delete("/session")
+@auth_router.post("/session")
+def create_session(request: LoginRequest, response: Response):
+    try:
+        for i, user_dict in enumerate(user_db):
+            if user_dict["email"] == request.email:
+                password_hasher.verify(user_dict["hashed_password"], request.password)
+                sid = secrets.token_urlsafe(32)
+                exp_time = datetime.now(tz=timezone.utc) + timedelta(
+                    minutes=LONG_SESSION_LIFESPAN
+                )
+                session_db[sid] = (exp_time, i)
+
+                response.set_cookie(
+                    key="sid",
+                    value=sid,
+                    path="/",
+                    samesite="lax",
+                    httponly=True,
+                    max_age=LONG_SESSION_LIFESPAN * 60,
+                )
+                return
+    except argon2.exceptions.VerifyMismatchError:
+        raise InvalidAccountException()
+    raise InvalidAccountException()
+
+
+@auth_router.delete("/session", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(
+    response: Response,
+    sid: Annotated[str | None, Cookie()] = None,
+):
+    if sid:
+        response.set_cookie(
+            key="sid", value=sid, path="/", samesite="lax", httponly=True, max_age=0
+        )
+        if sid in session_db.keys():
+            del session_db[sid]
