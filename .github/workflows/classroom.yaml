@@ -20,4 +20,4 @@ jobs:
     - name: Install test dependecies
       run: uv add freezegun httpx pytest
     - name: Grade
-      run: uv run pytest
+      run: uv run pytest -s
